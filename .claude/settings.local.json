@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(py -m pytest tests/test_engine.py -v)",
+      "Bash(where python3:*)",
+      "Bash(where conda:*)",
+      "Read(//c/Users/fariz/miniconda3/**)",
+      "Read(//c/Users/fariz/anaconda3/**)",
+      "Bash(py --list)",
+      "Read(//c/Users/fariz/AppData/Local/conda/**)",
+      "Bash(conda env:*)",
+      "Read(//c/ProgramData/miniconda3/**)",
+      "Bash(/c/Users/fariz/AppData/Local/Python/bin/python3 -c \"import pandas; print\\(pandas.__version__\\)\")"
+    ]
+  }
+}
