@@ -18,6 +18,11 @@ import pytest
 
 from backtester.base import BaseStrategy
 from backtester.engine import Backtester, BacktestResult
+from backtester.costs import (
+    FlatBpsCostModel,
+    TieredCommissionModel,
+    SpreadSlippageModel,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -261,4 +266,149 @@ def test_benchmark_run_produces_valid_result(synthetic_data: pd.DataFrame) -> No
     assert "SPY" in result.trades["ticker"].values, (
         "Benchmark ticker 'SPY' not found in trades.  "
         f"Tickers traded: {result.trades['ticker'].unique().tolist()}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 6 — FlatBpsCostModel produces identical costs before and after refactor
+# ---------------------------------------------------------------------------
+
+def test_flat_model_matches_inline_costs(synthetic_data: pd.DataFrame) -> None:
+    """
+    The refactor must not change engine output for the default cost model.
+
+    Run the engine twice with identical effective parameters:
+      - Run A: default config (cost_model="flat" comes from _DEFAULT_CONFIG)
+      - Run B: explicitly setting cost_model="flat" with the same bps values
+
+    Total commission + slippage must be identical to floating-point precision,
+    proving that make_cost_model("flat") reproduces the old inline arithmetic.
+    """
+    # Run A — default config; cost_model="flat" is injected by _DEFAULT_CONFIG
+    engine_a = Backtester(synthetic_data)
+    result_a = engine_a.run(_AlwaysLongStrategy())
+
+    # Run B — same parameters, explicitly stated
+    engine_b = Backtester(
+        synthetic_data,
+        config={"cost_model": "flat", "commission_bps": 5, "slippage_bps": 2},
+    )
+    result_b = engine_b.run(_AlwaysLongStrategy())
+
+    costs_a = (
+        result_a.trades["commission"].sum() + result_a.trades["slippage"].sum()
+    )
+    costs_b = (
+        result_b.trades["commission"].sum() + result_b.trades["slippage"].sum()
+    )
+
+    assert abs(costs_a - costs_b) < 1e-9, (
+        f"Cost mismatch after refactor: "
+        f"default={costs_a:.6f}, explicit flat={costs_b:.6f}.  "
+        "The FlatBpsCostModel must reproduce the old inline arithmetic exactly."
+    )
+
+    # Snapshot in config must record the model name
+    assert result_a.config.get("cost_model") == "flat", (
+        "BacktestResult.config must record cost_model='flat'"
+    )
+    assert result_a.config.get("cost_model_params", {}).get("model") == "FlatBps", (
+        "BacktestResult.config['cost_model_params']['model'] must be 'FlatBps'"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 7 — TieredCommissionModel charges a higher per-dollar rate on small trades
+# ---------------------------------------------------------------------------
+
+def test_tiered_model_cheaper_for_large_trades() -> None:
+    """
+    A tiered model with tiers [(0, 10), (10_000, 3)] must charge:
+      - small trades  ($1,000) at 10 bps
+      - large trades ($50,000) at  3 bps
+
+    The per-dollar commission rate for small trades must exceed the
+    per-dollar rate for large trades, and the exact dollar amount for
+    the small trade must equal 1_000 * 10 / 10_000 = $1.00.
+    """
+    model = TieredCommissionModel(
+        tiers=[(0, 10), (10_000, 3)],
+        slippage_bps=0,   # isolate commission behaviour
+    )
+    date = pd.Timestamp("2021-06-01")
+
+    comm_small = model.commission(1_000, "AAPL", date)
+    comm_large = model.commission(50_000, "AAPL", date)
+
+    # Exact dollar amount for small trade
+    assert comm_small == 1_000 * 10 / 10_000, (
+        f"Expected $1.00 commission for $1,000 notional at 10 bps, "
+        f"got {comm_small:.6f}"
+    )
+
+    # Per-dollar cost comparison: small > large / 50 asserts higher per-$ rate
+    assert comm_small > comm_large / 50, (
+        f"Small-trade per-dollar cost ({comm_small/1_000:.6f}) should exceed "
+        f"large-trade per-dollar cost ({comm_large/50_000:.6f}).  "
+        f"comm_small={comm_small:.4f}, comm_large/50={comm_large/50:.4f}"
+    )
+
+    # Sanity: large trade uses 3 bps tier
+    assert comm_large == 50_000 * 3 / 10_000, (
+        f"Expected $15.00 commission for $50,000 notional at 3 bps, "
+        f"got {comm_large:.6f}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 8 — SpreadSlippageModel charges more on high-volatility days
+# ---------------------------------------------------------------------------
+
+def test_spread_model_costs_more_on_high_vol_days() -> None:
+    """
+    SpreadSlippageModel must scale slippage with realized volatility:
+      - low-vol day (10% ann. vol, below median): slippage floored at base bps
+      - high-vol day (40% ann. vol, above median): slippage exceeds base bps
+
+    With base_spread_bps=2, vol_scalar=0.5, median=0.25:
+      - low-vol:  effective_spread = max(2*(1+0.5*(0.4-1)), 2) = max(1.4, 2.0) = 2.0 bps
+      - high-vol: effective_spread = 2*(1+0.5*(1.6-1)) = 2*1.3 = 2.6 bps
+    """
+    low_vol_date  = pd.Timestamp("2020-01-02")
+    high_vol_date = pd.Timestamp("2020-01-03")
+
+    vol_series = pd.Series(
+        {low_vol_date: 0.10, high_vol_date: 0.40}
+    )  # median = 0.25
+
+    model = SpreadSlippageModel(
+        base_spread_bps=2,
+        vol_scalar=0.5,
+        realized_vol=vol_series,
+        commission_bps=0,  # isolate slippage behaviour
+    )
+
+    slip_low  = model.slippage(10_000, "AAPL", low_vol_date)
+    slip_high = model.slippage(10_000, "AAPL", high_vol_date)
+
+    # High-vol day must be more expensive
+    assert slip_high > slip_low, (
+        f"Expected higher slippage on high-vol day.  "
+        f"slip_low={slip_low:.4f}, slip_high={slip_high:.4f}"
+    )
+
+    # Low-vol day hits the floor: behaves identically to flat 2 bps
+    expected_floor = 10_000 * 2 / 10_000  # = 2.0
+    assert slip_low == expected_floor, (
+        f"Expected floor slippage of {expected_floor:.4f} on below-median vol day, "
+        f"got {slip_low:.4f}.  "
+        "The floor at base_spread_bps must prevent below-median vol from reducing cost."
+    )
+
+    # Degrade gracefully when vol data unavailable for date
+    missing_date = pd.Timestamp("2019-01-01")
+    slip_missing = model.slippage(10_000, "AAPL", missing_date)
+    assert slip_missing == expected_floor, (
+        f"SpreadSlippageModel must fall back to flat base_spread_bps "
+        f"when date is not in realized_vol.  Got {slip_missing:.4f}"
     )

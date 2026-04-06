@@ -24,6 +24,7 @@ import numpy as np
 import pandas as pd
 
 from backtester.base import BaseStrategy
+from backtester.costs import CostModel, make_cost_model
 
 
 # ---------------------------------------------------------------------------
@@ -39,6 +40,7 @@ _DEFAULT_CONFIG: dict = {
     "max_position_size": 0.25,        # max fraction of portfolio per ticker
     "rebalance_buffer":  0.01,        # min abs weight delta to trigger a trade
     "benchmark":         "SPY",
+    "cost_model":        "flat",      # "flat" | "tiered" | "spread"
 }
 
 # Canonical column order for the trades DataFrame (preserved even when empty)
@@ -112,6 +114,10 @@ class Backtester:
 
         self.data: pd.DataFrame = data
         self.config: dict = merged
+
+        # Instantiate cost model from config and snapshot its parameters
+        self.cost_model: CostModel = make_cost_model(self.config)
+        self.config["cost_model_params"] = self.cost_model.describe()
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -280,8 +286,6 @@ class Backtester:
             ``total_cost``     — total commission + slippage in USD
         """
         allow_short: bool = self.config["allow_short"]
-        commission_rate: float = self.config["commission_bps"] / 10_000
-        slippage_rate: float = self.config["slippage_bps"] / 10_000
         buffer: float = self.config["rebalance_buffer"]
 
         weight_delta: pd.Series = weights_today - weights_prev
@@ -304,8 +308,9 @@ class Backtester:
 
             dollar_trade: float = delta * portfolio_value
             shares: float = dollar_trade / price
-            commission: float = abs(dollar_trade) * commission_rate
-            slippage: float = abs(dollar_trade) * slippage_rate
+            notional: float = abs(dollar_trade)
+            commission: float = self.cost_model.commission(notional, ticker, date)
+            slippage: float = self.cost_model.slippage(notional, ticker, date)
             # net_cost: positive = cash outflow (buy); negative = cash inflow (sell)
             net_cost: float = dollar_trade + commission + slippage
 
@@ -548,6 +553,7 @@ class Backtester:
                 "total_return_pct": round(total_return_pct, 4),
                 "n_trades":         n_trades,
                 "total_costs":      round(total_costs, 2),
+                "cost_model":       r.config.get("cost_model", "unknown"),
             })
 
         summary = pd.DataFrame(rows).set_index("strategy")
