@@ -270,6 +270,39 @@ def test_benchmark_run_produces_valid_result(synthetic_data: pd.DataFrame) -> No
 
 
 # ---------------------------------------------------------------------------
+# Test 9 — run() populates result.metrics automatically
+# ---------------------------------------------------------------------------
+
+def test_run_populates_metrics(synthetic_data: pd.DataFrame) -> None:
+    """
+    After Backtester.run() completes, result.metrics must be a non-empty dict
+    containing at least the four metrics that downstream visualization depends on.
+
+    This test validates the wire-up between the engine and metrics.py — if the
+    deferred compute_metrics() call inside run() is missing or raises an
+    exception, this test will catch it.
+    """
+    engine = Backtester(synthetic_data)
+    result = engine.run(_AlwaysLongStrategy())
+
+    assert result.metrics != {}, (
+        "result.metrics is empty — compute_metrics() was not called inside run()"
+    )
+    assert "sharpe_ratio" in result.metrics, (
+        "'sharpe_ratio' is missing from result.metrics"
+    )
+    assert "max_drawdown_pct" in result.metrics, (
+        "'max_drawdown_pct' is missing from result.metrics"
+    )
+    assert result.metrics["max_drawdown_pct"] <= 0, (
+        f"max_drawdown_pct must be <= 0, got {result.metrics['max_drawdown_pct']}"
+    )
+    assert "total_return_pct" in result.metrics, (
+        "'total_return_pct' is missing from result.metrics"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Test 6 — FlatBpsCostModel produces identical costs before and after refactor
 # ---------------------------------------------------------------------------
 

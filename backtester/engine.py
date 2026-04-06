@@ -41,6 +41,7 @@ _DEFAULT_CONFIG: dict = {
     "rebalance_buffer":  0.01,        # min abs weight delta to trigger a trade
     "benchmark":         "SPY",
     "cost_model":        "flat",      # "flat" | "tiered" | "spread"
+    "risk_free_rate":    0.0,         # annualised, decimal (e.g. 0.04 = 4%)
 }
 
 # Canonical column order for the trades DataFrame (preserved even when empty)
@@ -340,7 +341,7 @@ class Backtester:
     # Public API
     # ------------------------------------------------------------------
 
-    def run(self, strategy: BaseStrategy) -> BacktestResult:
+    def run(self, strategy: BaseStrategy, _skip_metrics: bool = False) -> BacktestResult:
         """
         Execute the strategy backtest over ``self.data``.
 
@@ -468,7 +469,7 @@ class Backtester:
             f"Return: {total_return_pct:+.2f}%"
         )
 
-        return BacktestResult(
+        result = BacktestResult(
             strategy_name=strategy.get_name(),
             equity_curve=equity_series,
             returns=returns_series,
@@ -477,6 +478,25 @@ class Backtester:
             metrics={},
             config=self.config.copy(),
         )
+
+        if not _skip_metrics:
+            # Deferred import breaks the engine ↔ metrics circular dependency
+            from backtester.metrics import compute_metrics
+
+            benchmark_result: BacktestResult | None = None
+            if self.config["benchmark"] in self.data.columns:
+                try:
+                    benchmark_result = self.run_benchmark()
+                except Exception:
+                    benchmark_result = None
+
+            result.metrics = compute_metrics(
+                result,
+                benchmark=benchmark_result,
+                risk_free_rate=self.config.get("risk_free_rate", 0.0),
+            )
+
+        return result
 
     def run_benchmark(self) -> BacktestResult:
         """
@@ -505,7 +525,7 @@ class Backtester:
             def get_name(self) -> str:
                 return f"BuyAndHold({benchmark_ticker})"
 
-        return self.run(_BenchmarkHold())
+        return self.run(_BenchmarkHold(), _skip_metrics=True)
 
     def compare(
         self,

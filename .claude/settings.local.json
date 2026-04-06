@@ -11,7 +11,8 @@
       "Bash(conda env:*)",
       "Read(//c/ProgramData/miniconda3/**)",
       "Bash(/c/Users/fariz/AppData/Local/Python/bin/python3 -c \"import pandas; print\\(pandas.__version__\\)\")",
-      "Bash(\"/c/Users/fariz/AppData/Local/Python/pythoncore-3.14-64/python.exe\" -m pytest tests/test_engine.py -v)"
+      "Bash(\"/c/Users/fariz/AppData/Local/Python/pythoncore-3.14-64/python.exe\" -m pytest tests/test_engine.py -v)",
+      "Bash(\"/c/Users/fariz/AppData/Local/Python/pythoncore-3.14-64/python.exe\" -m pytest tests/test_metrics.py tests/test_engine.py -v)"
     ]
   }
 }

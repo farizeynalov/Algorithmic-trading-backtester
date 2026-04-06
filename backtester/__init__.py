@@ -13,6 +13,7 @@ from backtester.costs import (
     SpreadSlippageModel,
     make_cost_model,
 )
+from backtester.metrics import compute_metrics, drawdown_series
 
 __all__ = [
     "DataLoader",
@@ -23,4 +24,6 @@ __all__ = [
     "TieredCommissionModel",
     "SpreadSlippageModel",
     "make_cost_model",
+    "compute_metrics",
+    "drawdown_series",
 ]
