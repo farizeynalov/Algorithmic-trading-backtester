@@ -10,9 +10,11 @@ can do:
 from backtester.base import BaseStrategy
 from strategies.momentum import MomentumStrategy
 from strategies.mean_reversion import MeanReversionStrategy
+from strategies.ml_signal import MLSignalStrategy
 
 __all__ = [
     "BaseStrategy",
     "MomentumStrategy",
     "MeanReversionStrategy",
+    "MLSignalStrategy",
 ]
