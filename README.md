@@ -58,6 +58,21 @@ algo-trading-backtester/
 | ML Signal | TBD | TBD | TBD | TBD |
 | SPY (benchmark) | TBD | TBD | TBD | TBD |
 
+## Running the Streamlit app
+
+```bash
+pip install -r requirements.txt
+streamlit run app/streamlit_app.py
+```
+
+The app will open at http://localhost:8501.
+
+**Caching note:** The ML walk-forward strategy takes 30–60 seconds on the
+first run while the model trains.  Results are cached automatically — subsequent
+parameter changes for Momentum and Mean Reversion update the charts instantly.
+Changing ML parameters (model type, retrain frequency, N positions) triggers
+a fresh run only when those specific settings change.
+
 ## Setup
 
 ```bash
