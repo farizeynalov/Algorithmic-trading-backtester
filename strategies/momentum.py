@@ -20,35 +20,38 @@ from backtester.base import BaseStrategy
 
 
 class MomentumStrategy(BaseStrategy):
-    """
-    Cross-sectional momentum strategy with configurable lookback and skip periods.
+    """Cross-sectional momentum based on Jegadeesh and Titman (1993).
 
-    At the end of each month, tickers are ranked by their momentum return
-    (the cumulative return over the lookback window, excluding the skip window).
-    The top ``n_long`` tickers are bought; the bottom ``n_short`` tickers are
-    shorted (when ``allow_short=True`` in the engine).
+    At the end of each month, tickers are ranked by their cumulative
+    return over the lookback window excluding the skip window. The top
+    ``n_long`` tickers receive a signal of +1.0 (full long); the bottom
+    ``n_short`` tickers receive -1.0 (full short, requires
+    ``allow_short=True`` in the engine); all others receive 0.0 (flat).
 
-    Parameters
-    ----------
-    lookback_months : int
-        Number of months over which to measure past return.
-        Default 12 — the Jegadeesh-Titman specification.
-    skip_months : int
-        Number of most recent months to exclude from the lookback to
-        avoid short-term reversal contamination.  Default 1 (JT spec).
-        Effective measurement window: [T - lookback_months - skip_months,
-        T - skip_months].
-    n_long : int
-        Number of top-momentum tickers to go long.  Default 5.
-    n_short : int
-        Number of bottom-momentum tickers to short.  Default 0
-        (long-only strategy).
-    signal_type : str
-        ``"ranked"``     — binary on/off: top n_long get 1.0, bottom
-                           n_short get -1.0, all others 0.0.
-        ``"continuous"`` — every ticker gets a non-zero signal proportional
-                           to its cross-sectional rank, normalized so that
-                           the long and short sides are balanced.
+    Signal convention:
+        +1.0 — full long (maximum long allocation by the engine)
+         0.0 — flat (no position in this ticker)
+        -1.0 — full short (maximum short allocation by the engine)
+
+    Note:
+        The monthly ``shift(skip_months)`` in ``_compute_momentum_return``
+        implements the skip-month exclusion (signal definition).
+        The engine's ``shift(1)`` in ``_resolve_signals`` implements
+        execution timing (no same-day execution). These are orthogonal:
+        removing either shift would introduce a different form of bias.
+
+    Args:
+        lookback_months: Months over which to measure past return.
+            Default 12 (Jegadeesh-Titman specification).
+        skip_months: Most recent months excluded from the lookback to
+            avoid short-term reversal contamination. Default 1 (JT
+            spec). Effective window: [T - lookback - skip, T - skip].
+        n_long: Top-momentum tickers to go long. Default 5.
+        n_short: Bottom-momentum tickers to short. Default 0
+            (long-only strategy).
+        signal_type: ``"ranked"`` — binary ±1 / 0; ``"continuous"``
+            — every ticker receives a signal proportional to its
+            cross-sectional rank, normalised to roughly (-0.5, +0.5).
     """
 
     def __init__(
@@ -145,23 +148,24 @@ class MomentumStrategy(BaseStrategy):
         return momentum_daily
 
     def generate_signals(self, data: pd.DataFrame) -> pd.DataFrame:
-        """
-        Generate cross-sectional momentum signals for all tickers and dates.
+        """Generate cross-sectional momentum signals for all tickers.
 
-        Do NOT apply an additional shift inside this method.  The engine's
-        ``_resolve_signals()`` handles the execution-lag shift (T → T+1).
+        During the warmup period (first ``lookback_months + skip_months``
+        month-end dates), all signals are 0.0 because there is no
+        complete lookback window of return data yet.
 
-        Parameters
-        ----------
-        data : pd.DataFrame
-            Wide-format close prices with DatetimeIndex — the same object
-            passed to ``Backtester(data)``.
+        Warning:
+            Do not apply additional ``shift()`` inside this method —
+            the engine's ``_resolve_signals()`` handles the
+            execution-lag shift (T → T+1) structurally.
 
-        Returns
-        -------
-        pd.DataFrame
-            Signals in [-1, 1] with same index and columns as ``data``.
-            Rows in the warmup period contain 0.0 (flat).
+        Args:
+            data: Wide-format close prices with DatetimeIndex — the
+                same object passed to ``Backtester(data)``.
+
+        Returns:
+            Signals in [-1, 1] with the same index and columns as
+            ``data``. Warmup-period rows are 0.0 (flat).
         """
         momentum_daily: pd.DataFrame = self._compute_momentum_return(data)
 

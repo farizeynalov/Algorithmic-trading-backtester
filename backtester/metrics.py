@@ -35,21 +35,22 @@ TRADING_DAYS_PER_YEAR: int = 252
 # ---------------------------------------------------------------------------
 
 def _drawdown_series(equity_curve: pd.Series) -> pd.Series:
-    """
-    Compute the full drawdown series as a percentage.
+    """Compute the full drawdown series as a percentage.
 
-    At each date the drawdown is ``(equity - running_peak) / running_peak * 100``.
-    The result is always <= 0 (zero means the portfolio is at a new high).
+    At each date the drawdown is
+    ``(equity - running_peak) / running_peak * 100``.
 
-    Parameters
-    ----------
-    equity_curve : pd.Series
-        Daily portfolio value indexed by date.
+    Return values are always <= 0 by construction: the numerator is
+    non-positive because ``equity <= running_peak`` at every date.
+    The first value is always 0.0 because at inception the equity
+    equals the running peak (no drawdown at the start of the backtest).
 
-    Returns
-    -------
-    pd.Series
-        Drawdown in percentage terms; same index as ``equity_curve``.
+    Args:
+        equity_curve: Daily portfolio value indexed by date.
+
+    Returns:
+        Drawdown in percentage terms with the same index as
+        ``equity_curve``. Every value is <= 0.
     """
     running_max = equity_curve.cummax()
     return (equity_curve - running_max) / running_max * 100
@@ -68,34 +69,66 @@ def compute_metrics(
     benchmark: BacktestResult | None = None,
     risk_free_rate: float = 0.0,
 ) -> dict:
-    """
-    Compute a comprehensive suite of performance metrics from a BacktestResult.
+    """Compute a comprehensive suite of performance metrics.
 
-    Parameters
-    ----------
-    result : BacktestResult
-        Completed backtest output produced by ``Backtester.run()``.
-    benchmark : BacktestResult | None
-        Optional buy-and-hold benchmark result.  When provided, benchmark-
-        relative metrics (alpha, beta, IR, correlation) are included.
-        When None, those keys are absent from the returned dict.
-    risk_free_rate : float
-        Annualised risk-free rate as a decimal (e.g. 0.04 for 4%).
-        Defaults to 0.0.
+    Args:
+        result: Completed backtest output from ``Backtester.run()``.
+        benchmark: Optional buy-and-hold benchmark result. When
+            provided, the eight benchmark-relative metrics (marked
+            with * below) are included in the returned dict. When
+            None, those keys are absent.
+        risk_free_rate: Annualised risk-free rate as a decimal
+            (e.g. 0.04 for 4 %). Used in Sharpe and Sortino
+            denominators. Defaults to 0.0.
 
-    Returns
-    -------
-    dict
-        Flat mapping of metric name → value.  Values are Python float,
-        int, or None — never NumPy or Pandas scalar types.
+    Returns:
+        Flat dict of metric name → value. All values are Python
+        ``float``, ``int``, or ``None`` — never NumPy or Pandas
+        scalar types. Keys returned:
 
-    Notes
-    -----
-    win_rate_pct is a proxy: it counts the fraction of trades whose
-    direction is "BUY" rather than computing realised P&L per round-trip.
-    A true win-rate calculation would require matching every BUY with its
-    subsequent SELL and comparing entry and exit prices, which is
-    intentionally deferred to Phase 4 analytics.
+        - ``total_return_pct``: Cumulative return (%).
+        - ``annualized_return_pct``: CAGR scaled to 252 days (%).
+        - ``annualized_volatility_pct``: Ann. std dev of daily
+          returns (%).
+        - ``best_day_pct``: Single best daily return (%).
+        - ``worst_day_pct``: Single worst daily return (%).
+        - ``positive_days_pct``: Fraction of positive-return days (%).
+        - ``sharpe_ratio``: Ann. excess return / return std dev.
+        - ``sortino_ratio``: Ann. excess return / downside deviation.
+        - ``calmar_ratio``: Ann. return / |max drawdown|.
+        - ``max_drawdown_pct``: Peak-to-trough decline; always ≤ 0.
+        - ``max_drawdown_duration_days``: Calendar days peak→trough.
+        - ``recovery_days``: Days trough→new high; None if unrecovered.
+        - ``n_trades``: Total executed trade legs.
+        - ``win_rate_pct``: % of trades with direction=BUY (proxy).
+        - ``avg_trade_duration_days``: Mean days between BUY→SELL pairs.
+        - ``total_commission_pct``: Commission as % of starting capital.
+        - ``total_slippage_pct``: Slippage as % of starting capital.
+        - ``total_cost_pct``: commission_pct + slippage_pct.
+        - ``turnover_annual_pct``: Avg annual weight change (%).
+        - ``alpha_pct`` (*): Ann. return minus benchmark return (%).
+        - ``beta`` (*): Cov(strategy, benchmark) / Var(benchmark).
+        - ``correlation_with_benchmark`` (*): Pearson correlation.
+        - ``information_ratio`` (*): Active return / tracking error,
+          annualised.
+        - ``benchmark_total_return_pct`` (*): Benchmark cumul. return.
+        - ``benchmark_annualized_return_pct`` (*): Benchmark CAGR (%).
+        - ``benchmark_max_drawdown_pct`` (*): Benchmark max drawdown.
+        - ``benchmark_sharpe_ratio`` (*): Benchmark Sharpe ratio.
+
+        Keys marked (*) are only present when ``benchmark`` is provided.
+
+    Note:
+        ``win_rate_pct`` is a proxy: it counts the fraction of trades
+        whose direction is "BUY" rather than computing realised P&L per
+        round-trip. A true win-rate requires matching every BUY with its
+        subsequent SELL — this is a known limitation.
+
+    Example:
+        >>> from backtester import Backtester, compute_metrics
+        >>> result = Backtester(data).run(strategy)
+        >>> m = compute_metrics(result, risk_free_rate=0.04)
+        >>> print(m["sharpe_ratio"], m["max_drawdown_pct"])
     """
     equity: pd.Series = result.equity_curve
     returns: pd.Series = result.returns

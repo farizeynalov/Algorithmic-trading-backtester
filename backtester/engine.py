@@ -73,17 +73,47 @@ class BacktestResult:
 # ---------------------------------------------------------------------------
 
 class Backtester:
-    """
-    Event-driven, single-pass backtesting engine.
+    """Event-driven, single-pass backtesting engine.
 
-    Parameters
-    ----------
-    data : pd.DataFrame
-        Wide-format adjusted close prices (``df_wide`` from DataLoader).
-        Index must be a DatetimeIndex; columns are ticker symbols.
-    config : dict | None
-        Optional overrides for any default engine parameter.  Keys not
-        present fall back to the defaults in ``_DEFAULT_CONFIG``.
+    Two non-negotiable invariants are enforced at all times:
+
+    **Invariant 1 — No Lookahead Bias**: enforced *structurally* by
+    shifting all signals forward one bar in ``_resolve_signals()``.
+    It is architecturally impossible for a signal to consume data from
+    dates after its computation date.
+
+    **Invariant 2 — No Silent Failures**: every assumption about data
+    alignment, signal shape, and date coverage is explicitly asserted
+    with a descriptive error message. Wrong inputs raise errors; they
+    never produce silently wrong results.
+
+    Args:
+        data: Wide-format adjusted close prices (``df_wide`` from
+            DataLoader). Index must be a DatetimeIndex; columns are
+            ticker symbols.
+        config: Optional overrides for any engine parameter. Keys not
+            present fall back to ``_DEFAULT_CONFIG`` defaults:
+
+            - ``initial_capital`` (float): Starting portfolio value.
+              Default 100_000.
+            - ``commission_bps`` (int): One-way commission in bps.
+              Default 5.
+            - ``slippage_bps`` (int): One-way slippage in bps.
+              Default 2.
+            - ``position_sizing`` (str): ``"equal_weight"`` or
+              ``"signal_weighted"``. Default ``"equal_weight"``.
+            - ``allow_short`` (bool): Allow short positions. Default
+              False.
+            - ``max_position_size`` (float): Max per-ticker weight.
+              Default 0.25.
+            - ``rebalance_buffer`` (float): Min absolute weight delta
+              before a trade is executed. Default 0.01.
+            - ``benchmark`` (str): Benchmark ticker column. Default
+              ``"SPY"``.
+            - ``cost_model`` (str): ``"flat"``, ``"tiered"``, or
+              ``"spread"``. Default ``"flat"``.
+            - ``risk_free_rate`` (float): Annualised decimal.
+              Default 0.0.
     """
 
     def __init__(
@@ -125,24 +155,29 @@ class Backtester:
     # ------------------------------------------------------------------
 
     def _resolve_signals(self, raw_signals: pd.DataFrame) -> pd.DataFrame:
-        """
-        Enforce INVARIANT 1 by shifting all signals forward by one bar.
+        """Enforce Invariant 1 by shifting all signals forward by one bar.
 
         A strategy's signal on date T is derived from data through date T.
-        Applying .shift(1) ensures that signal only affects positions starting
-        on date T+1 — the structural guarantee of no lookahead bias.
+        Applying ``shift(1)`` ensures that the signal only affects
+        positions starting on date T+1. This is the structural guarantee
+        of Invariant 1: it is architecturally impossible for any signal
+        value computed on date T to influence the portfolio on date T.
 
-        Parameters
-        ----------
-        raw_signals : pd.DataFrame
-            Strategy output in [-1, 1] with index ⊆ self.data.index and
-            columns ⊆ self.data.columns.
+        Row 0 of the shifted DataFrame is always 0.0 (the NaN produced
+        by shift(1) is filled with 0, meaning the portfolio is flat on
+        the first date — no position before the first signal executes).
 
-        Returns
-        -------
-        pd.DataFrame
-            Shifted signals; row 0 is 0 (NaN filled) because the day-0
-            raw signal will execute on day 1.
+        Args:
+            raw_signals: Strategy output in [-1, 1] with
+                ``index ⊆ self.data.index`` and
+                ``columns ⊆ self.data.columns``.
+
+        Returns:
+            Shifted signals with the same shape; row 0 is always 0.0.
+
+        Raises:
+            AssertionError: If ``raw_signals`` index or columns are
+                not subsets of ``self.data``.
         """
         assert isinstance(raw_signals, pd.DataFrame), (
             f"raw_signals must be a pd.DataFrame, got {type(raw_signals).__name__}"
@@ -167,32 +202,28 @@ class Backtester:
         return shifted
 
     def _compute_weights(self, signals: pd.DataFrame) -> pd.DataFrame:
-        """
-        Convert shifted signals in [-1, 1] into target portfolio weights.
+        """Convert shifted signals in [-1, 1] into target portfolio weights.
 
-        Two modes are supported (``self.config["position_sizing"]``):
+        Two modes are controlled by ``self.config["position_sizing"]``:
 
-        ``"equal_weight"``
-            Every non-zero signal gets an equal share of the portfolio.
-            Longs receive +1/n_active; shorts receive -1/n_active (when
-            ``allow_short=True``).
+        ``"equal_weight"``: Every non-zero signal receives an equal share
+        of the portfolio. Longs get +1/n_active; shorts get -1/n_active
+        when ``allow_short=True``. Rows where all signals are zero stay
+        at 0.0 (fully cash).
 
-        ``"signal_weighted"``
-            Long weights are normalised so they sum to 1; short weights are
-            normalised so their absolute values sum to 1.
+        ``"signal_weighted"``: Long weights are normalised so they sum to
+        1; short weights are normalised so their absolute values sum to 1.
+        Zero signals are excluded from both pools.
 
-        In both modes individual weights are capped at ±max_position_size,
-        and the total absolute exposure is asserted to be ≤ 100%.
+        In both modes individual weights are capped at ``±max_position_size``
+        and the total absolute exposure is asserted to be ≤ 100%
+        (Invariant 2 enforcement).
 
-        Parameters
-        ----------
-        signals : pd.DataFrame
-            Shifted signals from ``_resolve_signals``.
+        Args:
+            signals: Shifted signals from ``_resolve_signals()``.
 
-        Returns
-        -------
-        pd.DataFrame
-            Portfolio weights; same shape as ``signals``.
+        Returns:
+            Portfolio weights with the same shape as ``signals``.
         """
         allow_short: bool = self.config["allow_short"]
         max_pos: float = self.config["max_position_size"]
@@ -263,28 +294,31 @@ class Backtester:
         portfolio_value: float,
         date: pd.Timestamp,
     ) -> tuple[pd.Series, list[dict], float]:
-        """
-        Compute position changes, apply a rebalance buffer, record trade costs.
+        """Compute position changes, apply rebalance buffer, record costs.
 
-        Parameters
-        ----------
-        weights_today : pd.Series
-            Target weights after rebalancing (aligned to self.data.columns).
-        weights_prev : pd.Series
-            Current holdings expressed as weights (aligned to self.data.columns).
-        prices_today : pd.Series
-            Closing prices for all tickers on this date.
-        portfolio_value : float
-            Current portfolio value in USD (after today's P&L, before costs).
-        date : pd.Timestamp
-            Current date — used only to tag each trade record.
+        The rebalance buffer (``config["rebalance_buffer"]``) suppresses
+        trades where the absolute weight delta is smaller than the
+        threshold. This avoids costly micro-rebalances that would not
+        meaningfully change portfolio exposure.
 
-        Returns
-        -------
-        tuple[pd.Series, list[dict], float]
-            ``weights_today``  — target weights (become new current weights)
-            ``trades``         — list of trade-record dicts
-            ``total_cost``     — total commission + slippage in USD
+        Args:
+            weights_today: Target weights after rebalancing, aligned to
+                ``self.data.columns``.
+            weights_prev: Current holdings as weights, aligned to
+                ``self.data.columns``.
+            prices_today: Closing prices for all tickers on this date.
+            portfolio_value: Current portfolio value in USD after today's
+                P&L and before costs are subtracted.
+            date: Trade execution date — used to tag each trade record
+                and passed to the cost model for vol-scaling.
+
+        Returns:
+            A three-tuple of:
+            - ``weights_today`` (pd.Series): target weights that become
+              the new current weights after execution.
+            - ``trades`` (list[dict]): one dict per executed trade leg
+              with keys matching ``_TRADE_COLUMNS``.
+            - ``total_cost`` (float): total commission + slippage in USD.
         """
         allow_short: bool = self.config["allow_short"]
         buffer: float = self.config["rebalance_buffer"]
@@ -341,22 +375,34 @@ class Backtester:
     # Public API
     # ------------------------------------------------------------------
 
-    def run(self, strategy: BaseStrategy, _skip_metrics: bool = False) -> BacktestResult:
-        """
-        Execute the strategy backtest over ``self.data``.
+    def run(
+        self,
+        strategy: BaseStrategy,
+        _skip_metrics: bool = False,
+    ) -> BacktestResult:
+        """Execute the strategy backtest over ``self.data``.
 
-        ``strategy.generate_signals()`` is called exactly once; the result
-        is cached before the loop begins to prevent accidental multi-calls.
+        ``strategy.generate_signals()`` is called exactly once before the
+        loop begins. Invariant 1 is enforced via ``_resolve_signals()``
+        before weights are computed.
 
-        Parameters
-        ----------
-        strategy : BaseStrategy
-            Concrete strategy instance.
+        Args:
+            strategy: Concrete strategy instance implementing
+                ``generate_signals()`` and ``get_name()``.
+            _skip_metrics: Internal use only. When True, skips the
+                ``compute_metrics()`` call and returns an empty metrics
+                dict. Do not set this parameter externally — it exists
+                only to prevent infinite recursion when
+                ``run_benchmark()`` calls ``run()`` internally.
 
-        Returns
-        -------
-        BacktestResult
-            Equity curve, daily returns, positions, trade log, and config.
+        Returns:
+            BacktestResult containing equity curve, daily returns,
+            position history, trade log, metrics dict, and config
+            snapshot.
+
+        Raises:
+            AssertionError: If signal shape, columns, or date coverage
+                fail validation (Invariant 2).
         """
         # ── Pre-run: generate and validate signals (called exactly once) ──────
         raw_signals: pd.DataFrame = strategy.generate_signals(self.data)
@@ -499,17 +545,19 @@ class Backtester:
         return result
 
     def run_benchmark(self) -> BacktestResult:
-        """
-        Run a buy-and-hold strategy on ``config["benchmark"]``.
+        """Run a buy-and-hold strategy on ``config["benchmark"]``.
 
         The benchmark is routed through the identical engine loop as any
         strategy — it pays the same commission, slippage, and rebalance
-        buffer — ensuring an apples-to-apples performance comparison.
+        buffer as the strategy runs — ensuring an apples-to-apples
+        performance comparison. Costs are applied identically so that
+        any cost advantage or disadvantage is attributable to strategy
+        behaviour, not to inconsistent friction assumptions.
 
-        Returns
-        -------
-        BacktestResult
-            Equity curve and trade log for the benchmark.
+        Returns:
+            BacktestResult containing the benchmark equity curve and
+            trade log. The metrics dict is empty (``_skip_metrics=True``
+            is set internally to avoid infinite recursion).
         """
         benchmark_ticker: str = self.config["benchmark"]
 
@@ -532,21 +580,21 @@ class Backtester:
         results: list[BacktestResult],
         benchmark: BacktestResult | None = None,
     ) -> pd.DataFrame:
-        """
-        Build a summary comparison table for multiple backtest results.
+        """Build a summary comparison table for multiple backtest results.
 
-        Parameters
-        ----------
-        results : list[BacktestResult]
-            Strategy results to compare.
-        benchmark : BacktestResult | None
-            Optional benchmark result; appended as the last row if provided.
+        The ``cost_model`` column (added in Phase 2.2) records the cost
+        model name from each result's config so the comparison table is
+        self-documenting about how costs were computed for each row.
 
-        Returns
-        -------
-        pd.DataFrame
-            Index = strategy names; columns = [final_value, total_return_pct,
-            n_trades, total_costs].
+        Args:
+            results: Strategy results to compare.
+            benchmark: Optional benchmark result; appended as the last
+                row if provided.
+
+        Returns:
+            DataFrame indexed by strategy name with columns:
+            ``final_value``, ``total_return_pct``, ``n_trades``,
+            ``total_costs``, ``cost_model``.
         """
         all_results: list[BacktestResult] = list(results) + (
             [benchmark] if benchmark is not None else []

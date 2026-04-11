@@ -34,6 +34,14 @@ build/
 *.egg
 MANIFEST
 
+# --- Analysis output (generated figures) ---
+analysis/figures/
+
+# --- Test / coverage artefacts ---
+.pytest_cache/
+.coverage
+htmlcov/
+
 # --- IDE ---
 .vscode/
 .idea/

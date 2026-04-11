@@ -21,29 +21,32 @@ from backtester.base import BaseStrategy
 
 
 class MeanReversionStrategy(BaseStrategy):
-    """
-    Bollinger Band mean-reversion strategy with RSI confirmation.
+    """Bollinger Band mean-reversion strategy with RSI confirmation.
 
-    Parameters
-    ----------
-    bb_window : int
-        Rolling window for Bollinger Band MA and std.  Default 20.
-    bb_std : float
-        Number of standard deviations (sigma) for band width.  Default 2.0.
-    rsi_window : int
-        RSI lookback period.  Default 14.
-    rsi_oversold : float
-        RSI threshold below which long entry is confirmed.  Default 35.
-        Entry requires BOTH price < lower band AND RSI < rsi_oversold.
-    rsi_overbought : float
-        RSI threshold above which short entry is confirmed.  Default 65.
-    exit_at_mean : bool
-        If True, exit long when price crosses back above the middle band (MA).
-        If False, exit long when price crosses above the upper band.
-        Default True (faster exit, more round-trips).
-    signal_type : str
-        ``"binary"``  — signal is exactly 1.0, -1.0, or 0.0.
-        ``"scaled"``  — signal intensity proportional to distance from band.
+    Entry requires price to cross a Bollinger Band boundary **and** RSI
+    to confirm oversold/overbought conditions. The RSI filter prevents
+    entries into genuine trending markets where mean reversion does not
+    apply. Signal construction is fully vectorized using a forward-fill
+    pattern as a stateless substitute for a loop-based position state
+    machine: entry conditions write ±1 into a sparse Series, exit
+    conditions write 0, and ``ffill()`` propagates the position between
+    events. Each ticker's signal is computed independently — there is no
+    cross-sectional ranking between tickers.
+
+    Args:
+        bb_window: Rolling window for Bollinger Band MA and std.
+            Default 20.
+        bb_std: Band width in standard deviations. Default 2.0.
+        rsi_window: RSI lookback period (Wilder EWM). Default 14.
+        rsi_oversold: RSI threshold confirming long entry. Default 35.
+            Entry requires price < lower band AND RSI < rsi_oversold.
+        rsi_overbought: RSI threshold confirming short entry.
+            Default 65.
+        exit_at_mean: If True, exit when price crosses the middle band
+            (MA). If False, exit at the opposite Bollinger Band.
+            Default True (faster exit, more round-trips).
+        signal_type: ``"binary"`` — signal is exactly ±1 or 0.
+            ``"scaled"`` — intensity proportional to distance from band.
     """
 
     def __init__(
@@ -180,23 +183,28 @@ class MeanReversionStrategy(BaseStrategy):
         return upper, middle, lower
 
     def _signals_for_ticker(self, prices: pd.Series) -> pd.Series:
-        """
-        Compute the mean-reversion signal for a single ticker.
+        """Compute the mean-reversion signal for a single ticker.
 
-        Fully vectorized: no Python loops over dates or rows.
-        The forward-fill pattern acts as a stateless state machine — entry
-        conditions set the signal, exit conditions reset it to 0, and
-        ffill() propagates the active position between events.
+        Fully vectorized — no Python loops over dates or rows.
 
-        Parameters
-        ----------
-        prices : pd.Series
-            Single-ticker close price series.
+        The forward-fill pattern is the key implementation detail: a
+        sparse Series is initialized with NaN, entry conditions write
+        ±1 at their dates, exit conditions write 0 at their dates, and
+        ``ffill()`` propagates the active position between events. This
+        is a stateless substitute for a loop-based state machine that
+        is both faster and easier to test for lookahead bias.
 
-        Returns
-        -------
-        pd.Series
+        Priority rule: when an entry and exit condition fire on the same
+        bar, exit takes priority and the signal is set to 0. This avoids
+        entering a position and immediately exiting on the same date.
+
+        Args:
+            prices: Single-ticker close price series.
+
+        Returns:
             Signal in [-1, 1] with the same index as ``prices``.
+            The warmup period (first ``bb_window + rsi_window`` bars)
+            is zeroed out regardless of indicator values.
         """
         # ── Step 1: compute indicators ──────────────────────────────────────
         upper, middle, lower = self._compute_bands(prices)
@@ -266,24 +274,22 @@ class MeanReversionStrategy(BaseStrategy):
         return signal
 
     def generate_signals(self, data: pd.DataFrame) -> pd.DataFrame:
-        """
-        Generate mean-reversion signals for all tickers independently.
+        """Generate mean-reversion signals for all tickers independently.
 
-        Each ticker's signal is computed in isolation from every other ticker
-        (no cross-sectional ranking).  The engine's ``_resolve_signals()``
-        applies a shift(1) on top to prevent same-day execution.
+        Each ticker's signal is computed in isolation via
+        ``_signals_for_ticker()`` — there is no cross-sectional ranking.
+        The engine's ``_resolve_signals()`` applies a ``shift(1)`` on
+        the combined DataFrame to prevent same-day execution.
 
-        Do NOT apply shift() here.
+        Warning:
+            Do not apply ``shift()`` here — the engine handles that.
 
-        Parameters
-        ----------
-        data : pd.DataFrame
-            Wide-format close prices with DatetimeIndex.
+        Args:
+            data: Wide-format close prices with DatetimeIndex.
 
-        Returns
-        -------
-        pd.DataFrame
-            Signals in [-1, 1] with same shape, index, and columns as ``data``.
+        Returns:
+            Signals in [-1, 1] with the same shape, index, and columns
+            as ``data``.
         """
         signals = data.apply(self._signals_for_ticker, axis=0)
 

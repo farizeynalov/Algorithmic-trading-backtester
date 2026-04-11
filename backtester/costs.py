@@ -41,22 +41,16 @@ import pandas as pd
 # ---------------------------------------------------------------------------
 
 class CostModel(ABC):
-    """
-    Abstract interface for all transaction cost models.
+    """Abstract interface for all transaction cost models.
 
-    Subclasses implement commission() and slippage() separately so that
-    callers can inspect each component.  total() is provided here and is
-    the single enforcement point for the non-negativity guarantee.
+    Subclasses implement ``commission()`` and ``slippage()`` separately
+    so callers can inspect each cost component. ``total()`` is provided
+    here and is the single enforcement point for the non-negativity
+    guarantee — subclasses must not duplicate the check.
 
-    Parameters passed to every method
-    ----------------------------------
-    notional : float
-        Absolute USD value of the trade (always >= 0).
-    ticker : str
-        Ticker symbol being traded (allows ticker-specific overrides in
-        subclasses; ignored by all current implementations).
-    date : pd.Timestamp
-        Trade execution date (used by SpreadSlippageModel to look up vol).
+    The ``notional`` parameter passed to every method is always the
+    absolute USD value of the trade (``abs(dollar_trade)``), so it is
+    always >= 0. Callers must never pass a signed dollar amount.
     """
 
     @abstractmethod

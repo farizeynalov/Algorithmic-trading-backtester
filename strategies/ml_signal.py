@@ -62,26 +62,40 @@ def compute_features(
     prices: pd.DataFrame,
     volumes: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    """
-    Compute technical features for all tickers.
+    """Compute the 13 technical features used by MLSignalStrategy.
 
-    All features are computed in wide format (same shape as ``prices``) and
-    then stacked to long format.  NaN rows (warmup period) are dropped after
-    forward-filling each feature independently.
+    All features are computed in wide format (same shape as ``prices``)
+    and then stacked to long format. NaN rows in the warmup period are
+    forward-filled per ticker and then dropped.
 
-    Parameters
-    ----------
-    prices : pd.DataFrame
-        Wide-format adjusted close prices (DatetimeIndex × tickers).
-    volumes : pd.DataFrame | None
-        Wide-format daily volumes (same shape as prices), or None.
-        If None, volume-based features are filled with 0.0.
+    When ``volumes`` is None, volume-based features ``vol_ratio_21d``
+    and ``vol_trend`` are filled with 0.0 rather than raising an error.
+    This allows the strategy to run on price-only data.
 
-    Returns
-    -------
-    pd.DataFrame
+    Features returned:
+        - ``ret_1d``: 1-day price return.
+        - ``ret_5d``: 5-day price return.
+        - ``ret_21d``: 21-day price return.
+        - ``ret_63d``: 63-day price return.
+        - ``vol_21d``: 21-day annualised realised volatility.
+        - ``vol_63d``: 63-day annualised realised volatility.
+        - ``mom_12_1``: 12-1 month Jegadeesh-Titman momentum.
+        - ``rsi_14``: 14-period Wilder RSI (range [0, 100]).
+        - ``bb_pct``: Bollinger Band %B (position within the band).
+        - ``price_to_52w_high``: Price ÷ 52-week rolling high.
+        - ``price_to_52w_low``: Price ÷ 52-week rolling low.
+        - ``vol_ratio_21d``: Volume ÷ 21-day mean volume (0 if no vol).
+        - ``vol_trend``: 21-day volume pct change (0 if no vol).
+
+    Args:
+        prices: Wide-format adjusted close prices
+            (DatetimeIndex × tickers).
+        volumes: Wide-format daily volumes (same shape as prices), or
+            None. When None, volume features are zero-filled.
+
+    Returns:
         Long-format DataFrame with MultiIndex (date, ticker).
-        Columns: all feature names in ALL_FEATURES.
+        Columns match ``ALL_FEATURES`` exactly.
     """
     feat: dict[str, pd.DataFrame] = {}
 
@@ -174,30 +188,26 @@ def compute_target(
     prices: pd.DataFrame,
     forward_days: int = 5,
 ) -> pd.Series:
-    """
-    Compute the binary cross-sectional outperformance target.
+    """Compute the binary cross-sectional outperformance target.
 
-    For each date and ticker: 1 if the ticker's forward return exceeds the
-    cross-sectional median on that date, 0 otherwise.
+    For each (date, ticker): 1 if the ticker's forward return exceeds
+    the cross-sectional median on that date, 0 otherwise.
 
-    Parameters
-    ----------
-    prices : pd.DataFrame
-        Wide-format close prices.
-    forward_days : int
-        Prediction horizon in trading days.
+    WARNING: Uses ``shift(-forward_days)``, which looks forward in time.
+    Only call this function on the training slice. Passing the full price
+    history to this function is lookahead bias if the prediction-period
+    rows are not subsequently dropped before fitting. The walk-forward
+    design in ``_train_predict_window`` enforces safety by calling
+    ``y_train.dropna()`` before fitting, which removes the tail rows
+    where ``shift(-forward_days)`` produced NaN.
 
-    Returns
-    -------
-    pd.Series
-        Binary target with MultiIndex (date, ticker).
+    Args:
+        prices: Wide-format adjusted close prices.
+        forward_days: Prediction horizon in trading days.
 
-    .. warning::
-        This function uses ``shift(-forward_days)``, which looks forward in
-        time.  It must NEVER be called on data that extends into the prediction
-        period — only on the training slice.  The walk-forward design in
-        ``_train_predict_window`` enforces this by dropping tail NaN targets
-        before fitting.
+    Returns:
+        Binary integer target (0 or 1) with MultiIndex (date, ticker).
+        1 = ticker outperformed cross-sectional median; 0 = did not.
     """
     # WARNING: uses shift(-forward_days) — only call on training data.
     # Calling on the full price history is lookahead bias if not sliced.
@@ -219,33 +229,46 @@ def compute_target(
 # ---------------------------------------------------------------------------
 
 class MLSignalStrategy(BaseStrategy):
-    """
-    Walk-forward ML classification strategy.
+    """Walk-forward ML classification strategy using XGBoost or sklearn.
 
-    A classifier is trained on an expanding window of technical features to
-    predict whether each ticker will outperform the cross-sectional median
-    return over the next ``forward_days`` trading days.  Tickers are then
-    ranked by predicted probability and the top ``n_long`` are held long.
+    A classifier is trained on an expanding window of technical features
+    to predict whether each ticker will outperform the cross-sectional
+    median return over the next ``forward_days`` trading days. The model
+    is retrained every ``retrain_freq_months`` months on all available
+    history up to the training cutoff — never on future data. Tickers
+    are ranked by predicted outperformance probability and the top
+    ``n_long`` are held long.
 
-    Parameters
-    ----------
-    model_type : str
-        ``"xgboost"`` | ``"random_forest"`` | ``"logistic"``
-    forward_days : int
-        Prediction horizon.  Default 5 (one trading week).
-    n_long : int
-        Number of top-ranked tickers to hold long each period.
-    n_short : int
-        Number of bottom-ranked tickers to short.  Default 0 (long-only).
-    min_train_years : int
-        Minimum years of data before first model training.
-    retrain_freq_months : int
-        How often (in months) to retrain the model on expanded data.
-    feature_importance_threshold : float
-        Drop features with importance below this fraction of max importance.
-        Only applies to xgboost/random_forest.  Default 0.0 (keep all).
-    scale_features : bool
-        Apply StandardScaler before fitting.  Mandatory for logistic.
+    Walk-forward expanding window: the first training window covers
+    ``min_train_years`` of history. Each subsequent window adds
+    ``retrain_freq_months`` of additional data. Predictions are always
+    generated for the out-of-sample period immediately following the
+    training cutoff.
+
+    Instance attributes populated by ``generate_signals()``:
+        models_: Dict mapping training cutoff → fitted classifier.
+        scalers_: Dict mapping training cutoff → fitted StandardScaler
+            (or None when ``scale_features=False``).
+        feature_names_: List of feature column names used by all models.
+        training_dates_: Ordered list of training cutoff dates.
+        feature_importances_: DataFrame of per-window feature
+            importances (only for tree-based models; None otherwise).
+        proba_wide_: Wide-format predicted probabilities indexed by
+            (date, ticker), populated after ``generate_signals()``.
+
+    Args:
+        model_type: ``"xgboost"``, ``"random_forest"``, or
+            ``"logistic"``.
+        forward_days: Prediction horizon in trading days. Default 5.
+        n_long: Top-ranked tickers to hold long each period. Default 5.
+        n_short: Bottom-ranked tickers to short. Default 0 (long-only).
+        min_train_years: Minimum years of history before first train.
+        retrain_freq_months: Months between retrains. Default 3.
+        feature_importance_threshold: Drop features with importance
+            below this fraction of the max. Only for tree-based models.
+            Default 0.0 (keep all features).
+        scale_features: Apply StandardScaler before fitting. Required
+            for logistic regression. Default True.
     """
 
     def __init__(
@@ -387,35 +410,38 @@ class MLSignalStrategy(BaseStrategy):
         predict_start: pd.Timestamp,
         predict_end: pd.Timestamp,
     ) -> pd.Series:
-        """
-        Train on data up to ``train_cutoff``; predict ``predict_start``→``predict_end``.
+        """Train on data up to ``train_cutoff``; predict the next window.
 
-        WALK-FORWARD INTEGRITY:
-        - Training set: features with date <= train_cutoff.
-        - NaN targets (last forward_days rows of training window) are dropped.
-          These NaNs come from compute_target's shift(-forward_days) — they
-          have no label yet and must not be used for training.
-          This is NOT lookahead — it is the correct labelling constraint.
-        - Scaler is fit on training data ONLY, then applied via transform()
-          (never fit_transform()) to prediction data.
-        - feature_cols determined from training set, applied consistently
-          to prediction set.
+        Walk-forward integrity constraints enforced here:
 
-        Parameters
-        ----------
-        features : pd.DataFrame
-            Pre-computed long-format features (date, ticker MultiIndex).
-        target : pd.Series
-            Binary target with same MultiIndex as features.
-        train_cutoff : pd.Timestamp
-            Last date allowed in the training set.
-        predict_start, predict_end : pd.Timestamp
-            Inclusive prediction window.
+        1. Training set is strictly ``date <= train_cutoff`` — no future
+           rows enter the training set.
+        2. NaN targets at the tail of the training window (produced by
+           ``compute_target``'s ``shift(-forward_days)``) are dropped
+           via ``y_train.dropna()`` before fitting. These rows have no
+           realized label yet; dropping them is correct, not lookahead.
+        3. The StandardScaler is ``fit_transform``-ed on ``X_train``
+           and then ``transform``-ed (never ``fit_transform``-ed) on
+           ``X_pred``. Fitting the scaler on prediction data would leak
+           distributional statistics from future dates into feature
+           scaling — a subtle but consequential form of lookahead bias.
+        4. Feature columns are determined from the training set and
+           applied consistently to the prediction set.
 
-        Returns
-        -------
-        pd.Series
-            Predicted P(outperform) with same MultiIndex as the prediction slice.
+        Args:
+            features: Pre-computed long-format features with MultiIndex
+                (date, ticker).
+            target: Binary target with the same MultiIndex as features.
+            train_cutoff: Last date (inclusive) in the training set.
+            predict_start: First date (inclusive) of the prediction
+                window.
+            predict_end: Last date (inclusive) of the prediction window.
+
+        Returns:
+            Predicted P(outperform) for each (date, ticker) in the
+            prediction window with the same MultiIndex as the slice.
+            Returns 0.5 (neutral) when training data is insufficient
+            (fewer than 100 rows).
         """
         # ── Training set: date <= train_cutoff ────────────────────────────────
         train_mask = features.index.get_level_values("date") <= train_cutoff

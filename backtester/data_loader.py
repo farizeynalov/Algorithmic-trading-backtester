@@ -29,9 +29,20 @@ from config import DEFAULT_TICKERS, START_DATE, END_DATE, RAW_DIR  # noqa: E402
 class DataLoader:
     """Fetches, caches, validates, and serves OHLCV market data.
 
-    Data is retrieved via yfinance one ticker at a time and stored as parquet
-    files in ``RAW_DIR``. On subsequent calls the cache is read instead of
-    re-downloading, making iterative development fast.
+    Data is retrieved via yfinance one ticker at a time and stored as
+    parquet files in ``RAW_DIR``. On subsequent calls the cache is read
+    instead of re-downloading, making iterative development fast.
+
+    The recommended instantiation path is ``DataLoader.from_config()``,
+    which reads all parameters from ``config.py`` so callers never need
+    to hard-code tickers or dates.
+
+    Attributes:
+        tickers: Ticker symbols that will be loaded.
+        start_date: Start of the date range in "YYYY-MM-DD" format.
+        end_date: End of the date range in "YYYY-MM-DD" format.
+        cache: When True, read from and write to parquet files in
+            RAW_DIR. When False, always re-download from yfinance.
 
     Example:
         >>> loader = DataLoader.from_config()
@@ -185,14 +196,15 @@ class DataLoader:
         return combined
 
     def load_wide(self, tickers: Optional[list[str]] = None) -> pd.DataFrame:
-        """Load close prices in wide format (one column per ticker).
+        """Load wide-format close prices (one column per ticker).
 
         Args:
-            tickers: Optional override list of ticker symbols.
+            tickers: Optional override list of ticker symbols. When
+                None, ``self.tickers`` is used.
 
         Returns:
-            A wide DataFrame indexed by ``date`` where each column is a ticker
-            and values are adjusted close prices.
+            Wide-format adjusted close prices indexed by ``date``,
+            one column per ticker symbol.
         """
         df_long = self.load(tickers)
         wide = df_long.pivot_table(index="date", columns="ticker", values="close")
@@ -203,11 +215,13 @@ class DataLoader:
         """Compute daily log returns for all tickers.
 
         Args:
-            tickers: Optional override list of ticker symbols.
+            tickers: Optional override list of ticker symbols. When
+                None, ``self.tickers`` is used.
 
         Returns:
-            A wide DataFrame of daily log returns with the same shape as
-            ``load_wide()`` minus the first row.
+            Wide-format log returns with the same columns as
+            ``load_wide()``; the first row is always dropped because
+            ``log(price / shift(1))`` is NaN on the first date.
         """
         prices = self.load_wide(tickers)
         log_returns = np.log(prices / prices.shift(1))
@@ -312,13 +326,18 @@ class DataLoader:
     def from_config(cls) -> "DataLoader":
         """Instantiate DataLoader using project-wide defaults from config.py.
 
+        This is the recommended instantiation path for all notebooks and
+        production code. Direct construction is reserved for tests that
+        need non-default tickers or date ranges.
+
         Returns:
             A ``DataLoader`` configured with ``DEFAULT_TICKERS``,
-            ``START_DATE``, and ``END_DATE`` from ``config.py``, with caching
-            enabled.
+            ``START_DATE``, and ``END_DATE`` from ``config.py``, with
+            caching enabled.
 
         Example:
             >>> loader = DataLoader.from_config()
+            >>> df_long = loader.load()
         """
         return cls(
             tickers=DEFAULT_TICKERS,

@@ -17,6 +17,9 @@ Typical usage::
 
 from __future__ import annotations
 
+import matplotlib
+matplotlib.use("Agg")
+
 import math
 import pathlib
 
@@ -29,6 +32,7 @@ import seaborn as sns
 
 from backtester import drawdown_series
 from backtester.engine import BacktestResult
+from backtester.metrics import TRADING_DAYS_PER_YEAR
 
 
 # ---------------------------------------------------------------------------
@@ -117,22 +121,29 @@ def _is_benchmark(result: BacktestResult) -> bool:
 # ---------------------------------------------------------------------------
 
 def plot_equity_curves(
-    results: list,
+    results: list[BacktestResult],
     benchmark: BacktestResult,
-    figsize: tuple = (14, 6),
+    figsize: tuple[int, int] = (14, 6),
     title: str = "Strategy equity curves",
-) -> tuple:
-    """
-    Normalize all equity curves to 100 at the common start date and plot.
+) -> tuple[plt.Figure, plt.Axes]:
+    """Normalize equity curves to 100 at the common start date and plot.
 
-    Common start = latest first-date across all results + benchmark.
-    Strategies are colored via PALETTE; benchmark is PALETTE["spy"] dashed;
-    cash is a dotted flat line at 100.  Each strategy is filled vs benchmark
-    (green where above, red where below, alpha 0.08).
+    Common start = latest first-date across all results and benchmark.
+    Strategies are colored via PALETTE; benchmark is PALETTE["spy"]
+    dashed; cash is a dotted flat line at 100. Each strategy is
+    filled vs benchmark (green where above, red where below, alpha 0.08).
 
-    Returns
-    -------
-    (fig, ax)
+    Args:
+        results: Strategy backtest results to plot.
+        benchmark: Benchmark result (buy-and-hold SPY).
+        figsize: Figure dimensions in inches.
+        title: Axes title text.
+
+    Returns:
+        ``(fig, ax)`` — a ``(plt.Figure, plt.Axes)`` tuple. The caller
+        controls rendering. Does not call ``plt.show()``. Call
+        ``plt.close(fig)`` after ``st.pyplot(fig)`` in Streamlit to
+        prevent figure accumulation.
     """
     fig, ax = plt.subplots(figsize=figsize)
 
@@ -232,18 +243,25 @@ def plot_equity_curves(
 # ---------------------------------------------------------------------------
 
 def plot_drawdowns(
-    results: list,
+    results: list[BacktestResult],
     benchmark: BacktestResult,
-    figsize: tuple = (14, 4),
-) -> tuple:
-    """
-    Drawdown series as filled areas (with outline) for all results + benchmark.
+    figsize: tuple[int, int] = (14, 4),
+) -> tuple[plt.Figure, plt.Axes]:
+    """Drawdown series as filled areas for all results and benchmark.
 
-    Max-drawdown trough annotated per strategy.
+    Each strategy's max-drawdown trough is annotated with its depth
+    value. The benchmark is rendered semi-transparently.
 
-    Returns
-    -------
-    (fig, ax)
+    Args:
+        results: Strategy backtest results to plot.
+        benchmark: Benchmark result (buy-and-hold SPY).
+        figsize: Figure dimensions in inches.
+
+    Returns:
+        ``(fig, ax)`` — a ``(plt.Figure, plt.Axes)`` tuple. The caller
+        controls rendering. Does not call ``plt.show()``. Call
+        ``plt.close(fig)`` after ``st.pyplot(fig)`` in Streamlit to
+        prevent figure accumulation.
     """
     fig, ax = plt.subplots(figsize=figsize)
 
@@ -303,20 +321,28 @@ def plot_drawdowns(
 # ---------------------------------------------------------------------------
 
 def plot_metrics_comparison(
-    results: list,
+    results: list[BacktestResult],
     benchmark: BacktestResult,
-    metrics_to_plot: list | None = None,
-    figsize: tuple = (14, 8),
-) -> tuple:
-    """
-    2 × 4 grid of grouped horizontal bar charts for 8 performance metrics.
+    metrics_to_plot: list[str] | None = None,
+    figsize: tuple[int, int] = (14, 8),
+) -> tuple[plt.Figure, np.ndarray]:
+    """2×4 grid of horizontal bar charts for 8 performance metrics.
 
     For ``max_drawdown_pct``, bars extend left (negative direction).
     Each bar is annotated with its numeric value.
 
-    Returns
-    -------
-    (fig, axes)  — ``axes.shape == (2, 4)``
+    Args:
+        results: Strategy backtest results to compare.
+        benchmark: Benchmark result appended as the last row.
+        metrics_to_plot: List of up to 8 metric keys to plot. Defaults
+            to ``_DEFAULT_METRICS`` (the 8 standard metrics).
+        figsize: Figure dimensions in inches.
+
+    Returns:
+        ``(fig, axes)`` where ``axes`` is ``np.ndarray`` of shape
+        ``(2, 4)``. Does not call ``plt.show()``. Call
+        ``plt.close(fig)`` after ``st.pyplot(fig)`` in Streamlit to
+        prevent figure accumulation.
     """
     if metrics_to_plot is None:
         metrics_to_plot = _DEFAULT_METRICS
@@ -372,19 +398,27 @@ def plot_metrics_comparison(
 # ---------------------------------------------------------------------------
 
 def plot_rolling_metrics(
-    results: list,
+    results: list[BacktestResult],
     benchmark: BacktestResult,
     window: int = 63,
-    figsize: tuple = (14, 10),
-) -> tuple:
-    """
-    Three stacked subplots (shared x-axis): rolling return, Sharpe, max DD.
+    figsize: tuple[int, int] = (14, 10),
+) -> tuple[plt.Figure, np.ndarray]:
+    """Three stacked subplots: rolling return, Sharpe, and max drawdown.
 
-    Regime shading: COVID-19 (2020) and Rate hikes (2022).
+    Subplots share the x-axis. Regime shading marks the COVID-19
+    period (2020) and the rate-hike period (2022).
 
-    Returns
-    -------
-    (fig, axes)  — ``axes.shape == (3,)``
+    Args:
+        results: Strategy backtest results to plot.
+        benchmark: Benchmark result (buy-and-hold SPY).
+        window: Rolling window in trading days. Default 63 (≈1 quarter).
+        figsize: Figure dimensions in inches.
+
+    Returns:
+        ``(fig, axes)`` where ``axes`` is ``np.ndarray`` of shape
+        ``(3,)``. Does not call ``plt.show()``. Call
+        ``plt.close(fig)`` after ``st.pyplot(fig)`` in Streamlit to
+        prevent figure accumulation.
     """
     fig, axes = plt.subplots(3, 1, figsize=figsize, sharex=True)
     ax0, ax1, ax2 = axes
@@ -398,7 +432,7 @@ def plot_rolling_metrics(
     # ── Row 1: Rolling annualized return ─────────────────────────────────────
     for r, color in zip(all_r, colors):
         lw, ls = _ls(r)
-        roll_ret = r.returns.rolling(window).mean() * 252 * 100
+        roll_ret = r.returns.rolling(window).mean() * TRADING_DAYS_PER_YEAR * 100
         ax0.plot(roll_ret.index, roll_ret.values,
                  color=color, linewidth=lw, linestyle=ls,
                  label=_label(r.strategy_name))
@@ -413,7 +447,7 @@ def plot_rolling_metrics(
         roll_mean = r.returns.rolling(window).mean()
         roll_std = r.returns.rolling(window).std()
         roll_std = roll_std.replace(0, np.nan)
-        roll_sharpe = (roll_mean / roll_std) * math.sqrt(252)
+        roll_sharpe = (roll_mean / roll_std) * math.sqrt(TRADING_DAYS_PER_YEAR)
         ax1.plot(roll_sharpe.index, roll_sharpe.values,
                  color=color, linewidth=lw, linestyle=ls)
     ax1.axhline(0, color="gray", linewidth=0.8)
@@ -469,18 +503,24 @@ def plot_rolling_metrics(
 # ---------------------------------------------------------------------------
 
 def plot_correlation_matrix(
-    results: list,
+    results: list[BacktestResult],
     benchmark: BacktestResult,
-    figsize: tuple = (8, 7),
-) -> tuple:
-    """
-    Pearson return-correlation heatmap for all strategies + benchmark.
+    figsize: tuple[int, int] = (8, 7),
+) -> tuple[plt.Figure, plt.Axes]:
+    """Pearson return-correlation heatmap for all strategies and benchmark.
 
-    Adds an interpretation note below the figure if diversification is present.
+    Adds an interpretation note below the figure noting whether low
+    correlation (< 0.3 off-diagonal) implies diversification potential.
 
-    Returns
-    -------
-    (fig, ax)
+    Args:
+        results: Strategy backtest results to include.
+        benchmark: Benchmark result included as the final column/row.
+        figsize: Figure dimensions in inches.
+
+    Returns:
+        ``(fig, ax)`` — a ``(plt.Figure, plt.Axes)`` tuple. Does not
+        call ``plt.show()``. Call ``plt.close(fig)`` after
+        ``st.pyplot(fig)`` in Streamlit to prevent figure accumulation.
     """
     all_r = list(results) + [benchmark]
     series_dict = {r.strategy_name[:20]: r.returns for r in all_r}
@@ -527,14 +567,22 @@ def plot_correlation_matrix(
 
 def plot_monthly_returns_heatmap(
     result: BacktestResult,
-    figsize: tuple = (14, 6),
-) -> tuple:
-    """
-    Calendar heatmap: rows = years, cols = Jan–Dec + Full Year.
+    figsize: tuple[int, int] = (14, 6),
+) -> tuple[plt.Figure, plt.Axes]:
+    """Monthly return calendar heatmap: rows = years, cols = Jan–Dec + Full Year.
 
-    Returns
-    -------
-    (fig, ax)
+    Cells show the compounded monthly return in %. Green = positive,
+    red = negative. The Full Year column shows the annual compounded
+    return.
+
+    Args:
+        result: Single strategy backtest result to visualise.
+        figsize: Figure dimensions in inches.
+
+    Returns:
+        ``(fig, ax)`` — a ``(plt.Figure, plt.Axes)`` tuple. Does not
+        call ``plt.show()``. Call ``plt.close(fig)`` after
+        ``st.pyplot(fig)`` in Streamlit to prevent figure accumulation.
     """
     monthly = result.returns.resample("ME").apply(
         lambda x: (1 + x).prod() - 1
@@ -595,14 +643,25 @@ def plot_monthly_returns_heatmap(
 
 def plot_trade_analysis(
     result: BacktestResult,
-    figsize: tuple = (14, 8),
-) -> tuple:
-    """
-    2 × 2 panel: trade directions, monthly costs, size histogram, cost drag.
+    figsize: tuple[int, int] = (14, 8),
+) -> tuple[plt.Figure, np.ndarray]:
+    """2×2 panel: trade directions, monthly costs, size histogram, cost drag.
 
-    Returns
-    -------
-    (fig, axes)
+    Panels:
+        - Top-left: donut chart of trade directions (BUY/SELL/SHORT/COVER).
+        - Top-right: monthly commission and slippage stacked bars.
+        - Bottom-left: KDE histogram of trade notional sizes.
+        - Bottom-right: cumulative cost drag as % of initial capital.
+
+    Args:
+        result: Single strategy backtest result.
+        figsize: Figure dimensions in inches.
+
+    Returns:
+        ``(fig, axes)`` where ``axes`` is ``np.ndarray`` of shape
+        ``(2, 2)``. Does not call ``plt.show()``. Call
+        ``plt.close(fig)`` after ``st.pyplot(fig)`` in Streamlit to
+        prevent figure accumulation.
     """
     fig, axes = plt.subplots(2, 2, figsize=figsize)
     trades = result.trades
@@ -722,15 +781,23 @@ def plot_trade_analysis(
 
 def plot_position_concentration(
     result: BacktestResult,
-    figsize: tuple = (14, 5),
-) -> tuple:
-    """
-    Left: portfolio weight heatmap over time (weekly sample).
-    Right: mean weight per ticker (horizontal bar).
+    figsize: tuple[int, int] = (14, 5),
+) -> tuple[plt.Figure, np.ndarray]:
+    """Portfolio weight heatmap and mean weight bar chart.
 
-    Returns
-    -------
-    (fig, axes)
+    Left panel: weekly-sampled weight heatmap over time (rows = tickers,
+    cols = dates). Right panel: mean portfolio weight per ticker as a
+    horizontal bar chart.
+
+    Args:
+        result: Single strategy backtest result.
+        figsize: Figure dimensions in inches.
+
+    Returns:
+        ``(fig, axes)`` where ``axes`` is ``np.ndarray`` of shape
+        ``(2,)`` containing ``[ax_heatmap, ax_bar]``. Does not call
+        ``plt.show()``. Call ``plt.close(fig)`` after
+        ``st.pyplot(fig)`` in Streamlit to prevent figure accumulation.
     """
     fig, axes = plt.subplots(1, 2, figsize=figsize)
     ax_heat, ax_bar = axes
