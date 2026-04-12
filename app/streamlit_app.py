@@ -182,18 +182,42 @@ def _collect_results(strategy_choice: str, data_key: str) -> tuple:
 
     # ── ML Signal ─────────────────────────────────────────────────────────────
     if strategy_choice in ("ML Signal", "All Three (comparison)"):
-        ml_params = tuple({
-            "model_type":          st.session_state.get("ml_model_type", "xgboost"),
-            "n_long":              st.session_state.get("ml_n_long", 5),
-            "min_train_years":     3,
-            "retrain_freq_months": st.session_state.get("ml_retrain", 3),
-        }.items())
+        ml_fast_mode = st.session_state.get("ml_fast_mode", True)
+        ml_model_type = st.session_state.get("ml_model_type", "xgboost")
+        ml_n_long     = st.session_state.get("ml_n_long", 5)
+        ml_retrain    = st.session_state.get("ml_retrain", 3)
+
+        if ml_fast_mode:
+            ml_params = tuple({
+                "model_type":          "logistic",
+                "n_long":              ml_n_long,
+                "min_train_years":     3,
+                "retrain_freq_months": 12,
+            }.items())
+        else:
+            ml_params = tuple({
+                "model_type":          ml_model_type,
+                "n_long":              ml_n_long,
+                "min_train_years":     3,
+                "retrain_freq_months": ml_retrain,
+            }.items())
+
+        # Invalidate cached result when any ML parameter changes
+        current_ml_key = str(ml_params) + data_key
+        if st.session_state.get("ml_cache_key") != current_ml_key:
+            st.session_state["ml_result"] = None
+            st.session_state["ml_cache_key"] = current_ml_key
 
         if "ml_result" not in st.session_state:
             st.session_state["ml_result"] = None
 
         if st.session_state["ml_result"] is None:
-            if st.button("▶ Run ML Signal strategy (30-60 seconds)"):
+            btn_label = (
+                "▶ Run ML Signal strategy (~10 seconds, fast mode)"
+                if ml_fast_mode else
+                "▶ Run ML Signal strategy (~60 seconds, full mode)"
+            )
+            if st.button(btn_label):
                 with st.spinner("Running ML Signal strategy..."):
                     st.session_state["ml_result"] = run_strategy(
                         "ml_signal", ml_params, data_key)
@@ -292,6 +316,15 @@ def main() -> None:
                 )
                 st.slider("N long positions", 1, 10, 5, 1, key="ml_n_long")
                 st.slider("Retrain every N months", 1, 12, 3, 1, key="ml_retrain")
+                st.toggle(
+                    "Fast mode (recommended for web demo)",
+                    value=True,
+                    key="ml_fast_mode",
+                    help=(
+                        "Uses fewer estimators and longer retrain interval "
+                        "for faster results. Disable for full accuracy."
+                    ),
+                )
                 st.caption(
                     "⚠️ ML strategy takes 30–60s on first run. "
                     "Results are cached — parameter changes only "
