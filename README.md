@@ -1,16 +1,16 @@
 # 📈 Algorithmic Trading Backtester
 
 ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)
-![Tests: 58 passing](https://img.shields.io/badge/tests-58%20passing-brightgreen)
+![Tests: 75 passing](https://img.shields.io/badge/tests-75%20passing-brightgreen)
 ![License: MIT](https://img.shields.io/badge/license-MIT-lightgrey)
-![Streamlit app](https://img.shields.io/badge/Streamlit-app-red?logo=streamlit&logoColor=white)
+[![Streamlit App](https://img.shields.io/badge/Streamlit-App-red?logo=streamlit&logoColor=white)](https://algorithmic-trading-backtester-farizeynalov.streamlit.app)
 ![Code style: PEP8](https://img.shields.io/badge/code%20style-PEP8-black)
 
 A production-quality backtesting framework implementing three quantitative trading
 strategies on S&P 500 equities, with a full performance analytics suite and
 interactive Streamlit dashboard.
 
-| [Live App](#running-the-streamlit-app) | [Strategies](#strategies) | [Results](#results) | [Architecture](#architecture) | [Setup](#setup) |
+| [Live App](https://algorithmic-trading-backtester-farizeynalov.streamlit.app) | [Strategies](#strategies) | [Results](#results) | [Architecture](#architecture) | [Setup](#setup) |
 
 ---
 
@@ -343,7 +343,7 @@ when those specific settings change.
 1. Fork the repository on GitHub.
 2. Connect your fork to [share.streamlit.io](https://share.streamlit.io).
 3. Set the main file path: `app/streamlit_app.py`
-4. Set the requirements file: `app/requirements_streamlit.txt`
+4. Streamlit Cloud will pick up `requirements.txt` from the repository root automatically.
 
 ---
 
@@ -369,15 +369,15 @@ pytest tests/ --cov=backtester --cov=strategies --cov=analysis
 | `test_mean_reversion.py` | 10 | BB bands, RSI, ffill signals, exit rule comparison |
 | `test_ml_signal.py` | 10 | Walk-forward integrity, scaler leakage, feature shape |
 | `test_visualizations.py` | 8 | Figure objects, file export, PALETTE consistency |
-| `test_streamlit_app.py` | 5 | Cache key hashing, path resolution, color config |
-| **Total** | **58** | |
+| `test_streamlit_app.py` | 22 | Cache key hashing, path resolution, color config, data loading |
+| **Total** | **75** | |
 
 ---
 
 ## Contributing
 
 Pull requests are welcome. Please:
-- Run `pytest tests/ -v` and confirm all 58 tests pass before opening a PR.
+- Run `pytest tests/ -v` and confirm all 75 tests pass before opening a PR.
 - Follow PEP 8 style throughout.
 - Add tests for any new public function or class.
 
