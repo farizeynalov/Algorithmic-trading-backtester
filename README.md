@@ -194,16 +194,28 @@ cutoff.
 
 ## Results
 
-> ⚠️ Results shown below are illustrative. Run the notebook
-> `notebooks/05_comparison_dashboard.ipynb` to reproduce with live data.
+> Results below are from a live backtest run on Yahoo Finance
+> data. To reproduce, run `notebooks/05_comparison_dashboard.ipynb`.
 
 | Strategy | Ann. Return | Sharpe | Sortino | Max DD | Alpha | Costs |
 |---|---|---|---|---|---|---|
-| Momentum | TBD | TBD | TBD | TBD | TBD | TBD |
-| Mean Reversion | TBD | TBD | TBD | TBD | TBD | TBD |
-| ML Signal (XGB) | TBD | TBD | TBD | TBD | TBD | TBD |
+| Momentum | 33.64% | 1.30 | 1.62 | -36.39% | 30.17% | 12.04% |
+| Mean Reversion | 15.22% | 0.98 | 0.95 | -28.83% | 11.75% | 65.11% |
+| ML Signal (XGB) | 18.40% | 1.12 | 0.86 | -36.73% | 14.93% | 169.36% |
 | Combined (EW) | TBD | TBD | TBD | TBD | TBD | TBD |
-| SPY (benchmark) | TBD | TBD | TBD | TBD | — | — |
+| SPY (benchmark) | 3.47% | 0.80 | 0.95 | -9.26% | — | — |
+
+> **Notes:**
+> - Backtest period: 2015-01-01 → 2024-12-31
+> - Universe: 20 S&P 500 stocks + SPY benchmark
+> - Initial capital: $100,000
+> - Transaction costs: 5 bps commission + 2 bps slippage per trade
+> - Mean Reversion run with bb_std=1.5, rsi_oversold=45.
+>   Exit condition uses price crossover (not level) to avoid
+>   signal cancellation on entry bars.
+> - ML Signal high costs (169%) reflect excessive turnover
+>   (5,067 trades). A turnover constraint would reduce this
+>   significantly in a production implementation.
 
 ### Figures
 
