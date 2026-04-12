@@ -214,12 +214,18 @@ class MeanReversionStrategy(BaseStrategy):
         long_entry = (prices < lower) & (rsi < self.rsi_oversold)
         short_entry = (prices > upper) & (rsi > self.rsi_overbought)
 
+        # Crossover-based exits: fire only on the bar price crosses the
+        # threshold, not on every bar where price happens to be beyond it.
+        # This prevents the opposite exit condition from silently overwriting
+        # entry signals — e.g. short_exit (prices <= middle) is True on every
+        # long-entry bar (price < lower < middle), so a level-based short_exit
+        # would zero out every long entry before ffill even runs.
         if self.exit_at_mean:
-            long_exit = prices >= middle
-            short_exit = prices <= middle
+            long_exit  = (prices >= middle) & (prices.shift(1) < middle)
+            short_exit = (prices <= middle) & (prices.shift(1) > middle)
         else:
-            long_exit = prices >= upper
-            short_exit = prices <= lower
+            long_exit  = (prices >= upper) & (prices.shift(1) < upper)
+            short_exit = (prices <= lower) & (prices.shift(1) > lower)
 
         # ── Step 3: forward-fill state machine ──────────────────────────────
         # Initialize to NaN so ffill only propagates explicit signals
@@ -236,25 +242,27 @@ class MeanReversionStrategy(BaseStrategy):
         # Forward-fill: hold position between entry and exit events
         signal = raw.ffill().fillna(0.0)
 
-        # When entry and exit fire on the same bar, exit takes priority
-        signal[long_entry & long_exit] = 0.0
-        signal[short_entry & short_exit] = 0.0
+        # No post-ffill cleanup needed: crossover exits cannot fire on the
+        # same bar as entries because entry requires price BELOW the lower
+        # band while crossover long_exit requires price crossing ABOVE
+        # middle/upper — these are mutually exclusive by construction.
 
         # ── Step 4: apply scaled signal intensity ───────────────────────────
         if self.signal_type == "scaled":
-            rolling_std = prices.rolling(
-                self.bb_window, min_periods=self.bb_window
-            ).std()
+            # Normalize by current price so intensity measures the fractional
+            # distance below (or above) the band relative to price level.
+            # Dividing by bb_std*rolling_std (band half-width) under-weights
+            # high-volatility series because the denominator grows with std.
             long_intensity = (
-                (lower - prices) / (self.bb_std * rolling_std + 1e-9)
+                (lower - prices) / (prices + 1e-9)
             ).clip(0, 1)
             short_intensity = (
-                (prices - upper) / (self.bb_std * rolling_std + 1e-9)
+                (prices - upper) / (prices + 1e-9)
             ).clip(0, 1)
 
             signal = signal.copy()
             signal[signal > 0] = long_intensity[signal > 0]
-            signal[signal < -1] = -short_intensity[signal < -1]
+            signal[signal < 0] = -short_intensity[signal < 0]
             signal = signal.clip(-1, 1)
 
         # ── Step 5: zero out the warmup period ──────────────────────────────
