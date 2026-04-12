@@ -188,14 +188,24 @@ def _collect_results(strategy_choice: str, data_key: str) -> tuple:
             "min_train_years":     3,
             "retrain_freq_months": st.session_state.get("ml_retrain", 3),
         }.items())
-        with st.status("Running ML Signal strategy...", expanded=False) as status:
-            try:
-                ml_result = run_strategy("ml_signal", ml_params, data_key)
-                results.append(ml_result)
-                status.update(label="ML Signal complete ✓", state="complete", expanded=False)
-            except Exception as exc:
-                st.error(f"ML Signal strategy failed: {exc}")
-                status.update(label="ML Signal failed ✗", state="error", expanded=False)
+
+        if "ml_result" not in st.session_state:
+            st.session_state["ml_result"] = None
+
+        if st.session_state["ml_result"] is None:
+            if st.button("▶ Run ML Signal strategy (30-60 seconds)"):
+                with st.spinner("Running ML Signal strategy..."):
+                    st.session_state["ml_result"] = run_strategy(
+                        "ml_signal", ml_params, data_key)
+            else:
+                st.info(
+                    "Click the button above to run the ML Signal "
+                    "strategy. Momentum and Mean Reversion results "
+                    "are shown below."
+                )
+        ml_result = st.session_state["ml_result"]
+        if ml_result is not None:
+            results.append(ml_result)
 
     benchmark = run_benchmark(data_key)
     return results, benchmark
